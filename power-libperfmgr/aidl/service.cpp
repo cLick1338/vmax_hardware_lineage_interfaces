@@ -67,7 +67,35 @@ int main() {
 
     std::thread initThread([&]() {
         ::android::base::WaitForProperty(kPowerHalInitProp.data(), "1");
-        HintManager::GetInstance()->Start();
+
+        // Vmax: restore and watch the user's ceiling without polling while idle.
+        constexpr char kCpuFrequencyProp[] = "persist.sys.vmax.cpu_high_freq";
+        constexpr char kCpuFrequencyLimit[] = "CPU_FREQUENCY_LIMIT";
+        auto* hints = HintManager::GetInstance();
+        const bool supported = hints->IsHintSupported(kCpuFrequencyLimit);
+        bool highFrequency = false;
+        if (supported) {
+            highFrequency = ::android::base::GetBoolProperty(kCpuFrequencyProp, false);
+            if (!highFrequency) {
+                hints->DoHint(kCpuFrequencyLimit);
+            }
+        }
+        hints->Start();
+        if (supported) {
+            while (true) {
+                if (!::android::base::WaitForProperty(kCpuFrequencyProp,
+                                                     highFrequency ? "0" : "1")) {
+                    LOG(ERROR) << "Unable to watch CPU frequency preference";
+                    return;
+                }
+                highFrequency = ::android::base::GetBoolProperty(kCpuFrequencyProp, false);
+                const bool applied = highFrequency ? hints->EndHint(kCpuFrequencyLimit)
+                                                  : hints->DoHint(kCpuFrequencyLimit);
+                if (!applied) {
+                    LOG(ERROR) << "Failed to apply CPU frequency preference";
+                }
+            }
+        }
     });
     initThread.detach();
 
